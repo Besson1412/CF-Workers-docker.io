@@ -1,9 +1,10 @@
 // _worker.js
 
 // Docker镜像仓库主机地址
-let hub_host = 'registry-1.docker.io';
+// Docker镜像仓库主机地址
+let hub_host = 'registry-1.docker.io'; // 默认的Docker Hub主机地址，可以理解为Docker仓库的服务器地址
 // Docker认证服务器地址
-const auth_url = 'https://auth.docker.io';
+const auth_url = 'https://auth.docker.io'; // Docker认证服务器的地址，用于获取访问Docker Hub的token
 
 let 屏蔽爬虫UA = ['netcraft'];
 
@@ -55,10 +56,18 @@ function makeRes(body, status = 200, headers = {}) {
  * @param {string} base URL base
  */
 function newUrl(urlStr, base) {
+	// 尝试创建一个新的URL对象
 	try {
+		// URL构造函数：
+		// - urlStr:  要解析的URL字符串，可以是相对路径或绝对路径。
+		// - base:    如果urlStr是相对路径，则base提供一个基础URL。如果urlStr是绝对路径，则base会被忽略。
+		// 示例：
+		// new URL('/path/to/resource', 'https://example.com')  ->  https://example.com/path/to/resource
+		// new URL('https://another.com/resource')             ->  https://another.com/resource
 		console.log(`Constructing new URL object with path ${urlStr} and base ${base}`);
 		return new URL(urlStr, base); // 尝试构造新的URL对象
 	} catch (err) {
+		// 如果URL字符串无效，则会抛出错误
 		console.error(err);
 		return null // 构造失败返回null
 	}
@@ -342,7 +351,33 @@ export default {
 	async fetch(request, env, ctx) {
 		const getReqHeader = (key) => request.headers.get(key); // 获取请求头
 
+		// 从环境变量中获取密码
+		const pass = env.PASS;
+		// 从URL参数中获取用户输入的密码
+		const inputPass = new URL(request.url).searchParams.get('pass');
+
+		// 定义不需要密码验证的路径
+		const excludedPaths = [
+			'/v2/', // Docker Registry API v2
+			'/token', // Token 请求
+			'/v1/search',
+			'/v1/repositories'
+		];
+
 		let url = new URL(request.url); // 解析请求URL
+
+		// 检查是否需要密码验证
+		if (pass && !excludedPaths.some(path => url.pathname.startsWith(path))) {
+			// 如果设置了密码且当前路径需要验证
+			if (!inputPass || inputPass !== pass) {
+				// 如果用户未输入密码或密码错误，则返回403
+				return new Response('<h1>403 Forbidden</h1><p>需要密码才能访问此页面</p>', {
+					status: 403,
+					headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+				});
+			}
+		}
+
 		const userAgentHeader = request.headers.get('User-Agent');
 		const userAgent = userAgentHeader ? userAgentHeader.toLowerCase() : "null";
 		if (env.UA) 屏蔽爬虫UA = 屏蔽爬虫UA.concat(await ADD(env.UA));
@@ -368,8 +403,15 @@ export default {
 
 		const fakePage = checkHost ? checkHost[1] : false; // 确保 fakePage 不为 undefined
 		console.log(`域名头部: ${hostTop} 反代地址: ${hub_host} searchInterface: ${fakePage}`);
-		// 更改请求的主机名
-		url.hostname = hub_host;
+
+		// 更改请求的主机名，实现反向代理
+		// 1. 原始请求：客户端发送请求到Cloudflare Worker的域名。
+		// 2. 目标主机：Cloudflare Worker需要将请求转发到的目标服务器，这里是Docker Hub或其他镜像仓库。
+		// 3. 反向代理：Worker接收到客户端请求后，会将请求转发到目标主机，并将目标主机的响应返回给客户端，对客户端来说，Worker就像是目标主机的代理。
+		// 这一步非常关键，它将原始请求的域名替换为hub_host，实现了反向代理的核心功能。
+		// 原始请求是发送到worker的，现在worker将请求转发到Docker Hub或其他镜像仓库。
+		url.hostname = hub_host; // 将URL的主机名更改为目标Docker Hub的主机名，从而实现反向代理
+
 		const hubParams = ['/v1/search', '/v1/repositories'];
 		if (屏蔽爬虫UA.some(fxxk => userAgent.includes(fxxk)) && 屏蔽爬虫UA.length > 0) {
 			// 首页改成一个nginx伪装页
@@ -434,13 +476,16 @@ export default {
 		}
 
 		// 修改 /v2/ 请求路径
+		// 对于来自Docker Hub的/v2/请求，如果路径不包含/library/，则添加/library/
+		// 这是因为Docker Hub的某些镜像位于/library/命名空间下
 		if (hub_host == 'registry-1.docker.io' && /^\/v2\/[^/]+\/[^/]+\/[^/]+$/.test(url.pathname) && !/^\/v2\/library/.test(url.pathname)) {
 			//url.pathname = url.pathname.replace(/\/v2\//, '/v2/library/');
-			url.pathname = '/v2/library/' + url.pathname.split('/v2/')[1];
+			url.pathname = '/v2/library/' + url.pathname.split('/v2/')[1]; // 将路径修改为/v2/library/<原路径>
 			console.log(`modified_url: ${url.pathname}`);
 		}
 
 		// 构造请求参数
+		// parameter对象用于配置fetch请求的各项参数，例如请求头和缓存时间。
 		let parameter = {
 			headers: {
 				'Host': hub_host,

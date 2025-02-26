@@ -370,8 +370,44 @@ export default {
 		if (pass && !excludedPaths.some(path => url.pathname.startsWith(path))) {
 			// 如果设置了密码且当前路径需要验证
 			if (!inputPass || inputPass !== pass) {
-				// 如果用户未输入密码或密码错误，则返回403
-				return new Response('<h1>403 Forbidden</h1><p>需要密码才能访问此页面</p>', {
+				// 如果用户未输入密码或密码错误，则显示密码输入框
+				const html = `
+					<!DOCTYPE html>
+					<html>
+					<head>
+						<title>Password Required</title>
+						<style>
+							body {
+								font-family: sans-serif;
+								text-align: center;
+								padding-top: 50px;
+							}
+						</style>
+					</head>
+					<body>
+						<h1>Password Required</h1>
+						<p>Please enter the password to access this page:</p>
+						<script>
+							const pass = "${pass}";
+							const currentUrl = new URL(window.location.href);
+
+							function getPassword() {
+								const password = prompt("Enter password:", "");
+								if (password === pass) {
+									currentUrl.searchParams.set('pass', pass);
+									window.location.href = currentUrl.toString();
+								} else if (password !== null) {
+									alert("Incorrect password. Please try again.");
+									getPassword();
+								}
+							}
+
+							getPassword();
+						</script>
+					</body>
+					</html>
+				`;
+				return new Response(html, {
 					status: 403,
 					headers: { 'Content-Type': 'text/html; charset=UTF-8' },
 				});
